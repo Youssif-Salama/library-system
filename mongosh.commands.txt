@@ -1,0 +1,270 @@
+// Connect to database
+mongosh "mongodb://localhost:27017/libsys"
+
+// Switch to library database
+use libsys
+
+// 1. Member Statistics
+// Get total books borrowed by member
+db.borrowings.aggregate([
+  {
+    $match: {
+      member: ObjectId("68150a4c0686b56f64f00430")  // Example member ID
+    }
+  },
+  {
+    $group: {
+      _id: null,
+      uniqueBooks: { $addToSet: '$book' },
+      totalBorrows: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      uniqueBooksCount: { $size: '$uniqueBooks' },
+      totalBorrows: 1
+    }
+  }
+])
+
+// 2. Membership Type Analysis
+// Get statistics per membership type
+db.borrowings.aggregate([
+  {
+    $lookup: {
+      from: 'members',
+      localField: 'member',
+      foreignField: '_id',
+      as: 'memberInfo'
+    }
+  },
+  { $unwind: '$memberInfo' },
+  {
+    $group: {
+      _id: '$memberInfo.membershipType',
+      memberCount: { $addToSet: '$member' },
+      totalBorrows: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      membershipType: '$_id',
+      numberOfMembers: { $size: '$memberCount' },
+      totalBorrows: 1,
+      avgBorrowsPerMember: {
+        $round: [{ $divide: ['$totalBorrows', { $size: '$memberCount' }] }, 2]
+      }
+    }
+  },
+  { $sort: { numberOfMembers: -1 } }
+])
+
+// 3. Frequent Borrowers
+// Find members who borrowed at least N books
+db.borrowings.aggregate([
+  {
+    $group: {
+      _id: '$member',
+      borrowedBooks: { $addToSet: '$book' },
+      totalBorrows: { $sum: 1 }
+    }
+  },
+  {
+    $match: {
+      totalBorrows: { $gte: 2 }  // Minimum number of borrows
+    }
+  },
+  {
+    $lookup: {
+      from: 'members',
+      localField: '_id',
+      foreignField: '_id',
+      as: 'memberInfo'
+    }
+  },
+  { $unwind: '$memberInfo' },
+  {
+    $project: {
+      _id: 0,
+      memberId: '$_id',
+      name: '$memberInfo.name',
+      membershipType: '$memberInfo.membershipType',
+      totalBorrows: 1,
+      uniqueBooksCount: { $size: '$borrowedBooks' }
+    }
+  },
+  { $sort: { totalBorrows: -1 } }
+])
+
+// 4. Book Borrowing Patterns
+// Find most borrowed books
+db.borrowings.aggregate([
+  {
+    $group: {
+      _id: '$book',
+      borrowCount: { $sum: 1 },
+      uniqueBorrowers: { $addToSet: '$member' }
+    }
+  },
+  {
+    $lookup: {
+      from: 'books',
+      localField: '_id',
+      foreignField: '_id',
+      as: 'bookInfo'
+    }
+  },
+  { $unwind: '$bookInfo' },
+  {
+    $project: {
+      _id: 0,
+      title: '$bookInfo.title',
+      borrowCount: 1,
+      uniqueBorrowersCount: { $size: '$uniqueBorrowers' }
+    }
+  },
+  { $sort: { borrowCount: -1 } }
+])
+
+// 5. Search Commands
+// Find books by type
+db.books.find({ type: "fiction" })
+
+// Find members by membership type
+db.members.find({ membershipType: "vip" })
+
+// Find active borrowings
+db.borrowings.find({
+  returnDate: { $gt: new Date() }
+})
+
+// 6. Data Export Commands
+// Export collections to JSON
+mongoexport --db libsys --collection members --out members.json
+mongoexport --db libsys --collection books --out books.json
+mongoexport --db libsys --collection borrowings --out borrowings.json
+
+// 7. Data Import Commands
+// Import collections from JSON
+mongoimport --db libsys --collection members --file members.json
+mongoimport --db libsys --collection books --file books.json
+mongoimport --db libsys --collection borrowings --file borrowings.json
+------------------------------------------------------------------------------------
+// Create a new member
+db.members.insertOne({
+  name: "John Doe",
+  age: 30,
+  membershipType: "regular",
+  joinDate: new Date()
+})
+
+// Create multiple members
+db.members.insertMany([
+  {
+    name: "Alice Smith",
+    age: 25,
+    membershipType: "premium",
+    joinDate: new Date()
+  },
+  {
+    name: "Bob Wilson",
+    age: 35,
+    membershipType: "vip",
+    joinDate: new Date()
+  }
+])
+
+// Create a new book
+db.books.insertOne({
+  title: "The Great Book",
+  author: "Author Name",
+  description: "An amazing book about amazing things",
+  type: "fiction",
+  publishedDate: new Date()
+})
+
+// Create a new borrowing
+db.borrowings.insertOne({
+  member: ObjectId("68150a4c0686b56f64f00430"),
+  book: ObjectId("68150b94ec3d21f869abadaa"),
+  borrowDate: new Date(),
+  returnDate: new Date(Date.now() + 14*24*60*60*1000)
+})
+-----------------------------------------------------------------------------
+// Find all members
+db.members.find()
+
+// Find member by ID
+db.members.findOne({ _id: ObjectId("68150a4c0686b56f64f00430") })
+
+// Find members by membership type
+db.members.find({ membershipType: "vip" })
+
+// Find books by type with projection
+db.books.find(
+  { type: "fiction" },
+  { title: 1, author: 1, _id: 0 }
+)
+
+// Find borrowings with date range
+db.borrowings.find({
+  borrowDate: {
+    $gte: ISODate("2025-01-01"),
+    $lte: ISODate("2025-12-31")
+  }
+})
+-----------------------------------------------------------------------------------
+// Update member's membership type
+db.members.updateOne(
+  { _id: ObjectId("68150a4c0686b56f64f00430") },
+  { $set: { membershipType: "premium" } }
+)
+
+// Update multiple members' age
+db.members.updateMany(
+  { age: { $lt: 30 } },
+  { $inc: { age: 1 } }
+)
+
+// Update book description
+db.books.updateOne(
+  { _id: ObjectId("68150b94ec3d21f869abadaa") },
+  {
+    $set: {
+      description: "Updated description",
+      lastUpdated: new Date()
+    }
+  }
+)
+
+// Update borrowing return date
+db.borrowings.updateOne(
+  {
+    member: ObjectId("68150a4c0686b56f64f00430"),
+    book: ObjectId("68150b94ec3d21f869abadaa")
+  },
+  {
+    $set: {
+      returnDate: new Date(Date.now() + 7*24*60*60*1000)
+    }
+  }
+)
+---------------------------------------------------------------------------------
+// Delete one member
+db.members.deleteOne({ _id: ObjectId("68150a4c0686b56f64f00430") })
+
+// Delete multiple members
+db.members.deleteMany({ membershipType: "regular" })
+
+// Delete a book
+db.books.deleteOne({ _id: ObjectId("68150b94ec3d21f869abadaa") })
+
+// Delete all borrowings for a member
+db.borrowings.deleteMany({ member: ObjectId("68150a4c0686b56f64f00430") })
+
+// Delete all expired borrowings
+db.borrowings.deleteMany({
+  returnDate: { $lt: new Date() }
+})
